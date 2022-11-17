@@ -60,7 +60,8 @@ type SOAPHeaderResponse struct {
 }
 
 type SOAPBody struct {
-	XMLName xml.Name `xml:"SOAP-ENV:Body"`
+	XMLName      xml.Name `xml:"SOAP-ENV:Body"`
+	XmlNsSoapEnv string   `xml:"xmlns:SOAP-ENV,attr,omitempty"`
 
 	// XMLNSWsu is the SOAP WS-Security utility namespace.
 	XMLNSWsu string `xml:"xmlns:wsu,attr,omitempty"`
@@ -472,19 +473,23 @@ func (s *Client) CallWithFaultDetail(soapAction string, request, response interf
 func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader *security, err error) {
 	bodyWssRefId := makeSecureId("B-")
 	envelope.Body.ID = bodyWssRefId
+	envelope.Body.XmlNsSoapEnv = XmlNsSoapEnv
 	buf, err := xml.Marshal(&envelope.Body)
 	if nil != err {
 		return
 	}
+	envelope.Body.XmlNsSoapEnv = ""
 	dec := xml.NewDecoder(bytes.NewReader(buf))
 	cout, err := c14n.Canonicalize(dec)
 	if nil != err {
 		return
 	}
+	// log.Printf("******>>> %s", string(cout))
 	contentDigest := sha256.Sum256(cout)
 	encContentDigest := base64.StdEncoding.EncodeToString(contentDigest[:])
 	signedInfo := signedInfo{
-		XMLNS: NsXMLDSig,
+		XMLNS:        NsXMLDSig,
+		XmlNsSoapEnv: XmlNsSoapEnv,
 		CanonicalizationMethod: canonicalizationMethod{
 			Algorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
 			InclusiveNamespaces: inclusiveNamespaces{
@@ -514,11 +519,17 @@ func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader 
 	if buf, err = xml.Marshal(signedInfo); nil != err {
 		return
 	}
-	dec = xml.NewDecoder(bytes.NewReader(buf))
-	if cout, err = c14n.Canonicalize(dec); nil != err {
-		return
-	}
-	signedInfoDigest := sha256.Sum256(cout)
+	/*
+		dec = xml.NewDecoder(bytes.NewReader(buf))
+		if cout, err = c14n.Canonicalize(dec); nil != err {
+			return
+		}
+		log.Printf("******###1 %s", string(buf))
+		log.Printf("******###2 %s", string(cout))
+		log.Printf("******###3 %v", string(buf) != string(cout))
+		// signedInfoDigest := sha256.Sum256(cout)
+	*/
+	signedInfoDigest := sha256.Sum256(buf)
 	sigValue, err := rsa.SignPKCS1v15(rand.Reader, s.wssPrivateKey, crypto.SHA256, signedInfoDigest[:])
 	if nil != err {
 		return
@@ -660,17 +671,7 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 
 	client := s.opts.client
 	if client == nil {
-		tr := &http.Transport{
-			Proxy:           http.ProxyFromEnvironment,
-			TLSClientConfig: s.opts.tlsCfg,
-			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				d := net.Dialer{Timeout: s.opts.timeout}
-				return d.DialContext(ctx, network, addr)
-			},
-			TLSHandshakeTimeout:   s.opts.tlshshaketimeout,
-			ExpectContinueTimeout: time.Second * 2,
-		}
-		client = &http.Client{Timeout: s.opts.contimeout, Transport: tr}
+		client = makeDefaultClient(s.opts)
 	}
 	invokeResult.RequestContent.Header = req.Header.Clone()
 

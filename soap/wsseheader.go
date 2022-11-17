@@ -65,8 +65,9 @@ type signatureReference struct {
 }
 
 type signedInfo struct {
-	XMLName xml.Name `xml:"ds:SignedInfo"`
-	XMLNS   string   `xml:"xmlns:ds,attr"`
+	XMLName      xml.Name `xml:"ds:SignedInfo"`
+	XmlNsSoapEnv string   `xml:"xmlns:SOAP-ENV,attr,omitempty"`
+	XMLNS        string   `xml:"xmlns:ds,attr"`
 
 	CanonicalizationMethod canonicalizationMethod
 	SignatureMethod        signatureMethod
