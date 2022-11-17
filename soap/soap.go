@@ -11,7 +11,6 @@ import (
 	"encoding/base64"
 	"encoding/xml"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"log"
 	"net"
@@ -37,9 +36,10 @@ type SOAPEnvelopeResponse struct {
 	Attachments []MIMEMultipartAttachment `xml:"attachments,omitempty"`
 }
 
-// const SOAPMIMEType = "application/soap+xml; charset=utf-8"
 // const SOAPMIMEType = "text/xml; charset=utf-8"
-const SOAPMIMEType = "application/xml; charset=utf-8"
+// const SOAPMIMEType = "application/xml; charset=utf-8"
+// const SOAPMIMEType = "application/soap+xml; charset=utf-8"
+const SOAPMIMEType = "text/xml"
 
 type SOAPEnvelope struct {
 	XMLName xml.Name `xml:"SOAP-ENV:Envelope"`
@@ -213,6 +213,7 @@ const (
 	WssEncodeTypeBase64        = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary"
 	WssValueTypeX509v3         = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3"
 	NsXMLDSig                  = "http://www.w3.org/2000/09/xmldsig#"
+	NsXMLExcC14N               = "http://www.w3.org/2001/10/xml-exc-c14n#"
 )
 
 type WSSSecurityHeader struct {
@@ -271,6 +272,7 @@ type options struct {
 	contimeout       time.Duration
 	tlshshaketimeout time.Duration
 	client           HTTPClient
+	userAgent        string
 	httpHeaders      map[string]string
 	mtom             bool
 	mma              bool
@@ -280,6 +282,7 @@ var defaultOptions = options{
 	timeout:          time.Duration(30 * time.Second),
 	contimeout:       time.Duration(90 * time.Second),
 	tlshshaketimeout: time.Duration(15 * time.Second),
+	userAgent:        "gowsdl/0.1",
 }
 
 // A Option sets options such as credentials, tls, etc.
@@ -332,6 +335,13 @@ func WithTimeout(t time.Duration) Option {
 	}
 }
 
+// WithUserAgent is an Option to set User-Agent header value
+func WithUserAgent(userAgent string) Option {
+	return func(o *options) {
+		o.userAgent = userAgent
+	}
+}
+
 // WithHTTPHeaders is an Option to set global HTTP headers for all requests
 func WithHTTPHeaders(headers map[string]string) Option {
 	return func(o *options) {
@@ -352,6 +362,23 @@ func WithMTOM() Option {
 func WithMIMEMultipartAttachments() Option {
 	return func(o *options) {
 		o.mma = true
+	}
+}
+
+func makeDefaultClient(opts *options) HTTPClient {
+	tr := &http.Transport{
+		Proxy:           http.ProxyFromEnvironment,
+		TLSClientConfig: opts.tlsCfg,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			d := net.Dialer{Timeout: opts.timeout}
+			return d.DialContext(ctx, network, addr)
+		},
+		TLSHandshakeTimeout:   opts.tlshshaketimeout,
+		ExpectContinueTimeout: time.Second * 2,
+	}
+	return &http.Client{
+		Timeout:   opts.contimeout,
+		Transport: tr,
 	}
 }
 
@@ -377,6 +404,9 @@ func NewClient(url string, opt ...Option) *Client {
 	opts := defaultOptions
 	for _, o := range opt {
 		o(&opts)
+	}
+	if opts.client == nil {
+		opts.client = makeDefaultClient(&opts)
 	}
 	return &Client{
 		url:  url,
@@ -408,13 +438,13 @@ func (s *Client) SetHeaders(headers ...interface{}) {
 }
 
 // CallContext performs HTTP POST request with a context
-func (s *Client) CallContext(ctx context.Context, soapAction string, request, response interface{}) error {
+func (s *Client) CallContext(ctx context.Context, soapAction string, request, response interface{}) (*CallResult, error) {
 	return s.call(ctx, soapAction, request, response, nil, nil)
 }
 
 // Call performs HTTP POST request.
 // Note that if the server returns a status code >= 400, a HTTPError will be returned
-func (s *Client) Call(soapAction string, request, response interface{}) error {
+func (s *Client) Call(soapAction string, request, response interface{}) (*CallResult, error) {
 	return s.call(context.Background(), soapAction, request, response, nil, nil)
 }
 
@@ -422,13 +452,13 @@ func (s *Client) Call(soapAction string, request, response interface{}) error {
 // Note that if SOAP fault is returned, it will be stored in the error.
 // On top the attachments array will be filled with attachments returned from the SOAP request.
 func (s *Client) CallContextWithAttachmentsAndFaultDetail(ctx context.Context, soapAction string, request,
-	response interface{}, faultDetail FaultError, attachments *[]MIMEMultipartAttachment) error {
+	response interface{}, faultDetail FaultError, attachments *[]MIMEMultipartAttachment) (*CallResult, error) {
 	return s.call(ctx, soapAction, request, response, faultDetail, attachments)
 }
 
 // CallContextWithFault performs HTTP POST request.
 // Note that if SOAP fault is returned, it will be stored in the error.
-func (s *Client) CallContextWithFaultDetail(ctx context.Context, soapAction string, request, response interface{}, faultDetail FaultError) error {
+func (s *Client) CallContextWithFaultDetail(ctx context.Context, soapAction string, request, response interface{}, faultDetail FaultError) (*CallResult, error) {
 	return s.call(ctx, soapAction, request, response, faultDetail, nil)
 }
 
@@ -436,7 +466,7 @@ func (s *Client) CallContextWithFaultDetail(ctx context.Context, soapAction stri
 // Note that if SOAP fault is returned, it will be stored in the error.
 // the passed in fault detail is expected to implement FaultError interface,
 // which allows to condense the detail into a short error message.
-func (s *Client) CallWithFaultDetail(soapAction string, request, response interface{}, faultDetail FaultError) error {
+func (s *Client) CallWithFaultDetail(soapAction string, request, response interface{}, faultDetail FaultError) (*CallResult, error) {
 	return s.call(context.Background(), soapAction, request, response, faultDetail, nil)
 }
 
@@ -459,6 +489,7 @@ func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader 
 		CanonicalizationMethod: canonicalizationMethod{
 			Algorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
 			InclusiveNamespaces: inclusiveNamespaces{
+				XMLNS:      NsXMLExcC14N,
 				PrefixList: "SOAP-ENV",
 			},
 		},
@@ -469,8 +500,8 @@ func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader 
 			URI: "#" + bodyWssRefId,
 			Transforms: transforms{
 				Transform: transform{
-					Algorithm:           "http://www.w3.org/2001/10/xml-exc-c14n#",
-					InclusiveNamespaces: inclusiveNamespaces{},
+					Algorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
+					// InclusiveNamespaces: inclusiveNamespaces{},
 				},
 			},
 			DigestMethod: digestMethod{
@@ -528,7 +559,7 @@ func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader 
 }
 
 func (s *Client) call(ctx context.Context, soapAction string, request, response interface{}, faultDetail FaultError,
-	retAttachments *[]MIMEMultipartAttachment) error {
+	retAttachments *[]MIMEMultipartAttachment) (*CallResult, error) {
 	// SOAP envelope capable of namespace prefixes
 	envelope := SOAPEnvelope{
 		XmlNS: XmlNsSoapEnv,
@@ -538,7 +569,7 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 	soapHeaders := make([]interface{}, 1, 1+len(s.headers))
 	secHeader, err := s.makeWSSESecurityHeader(&envelope)
 	if nil != err {
-		return err
+		return nil, err
 	}
 	soapHeaders[0] = secHeader
 	if len(s.headers) > 0 {
@@ -549,30 +580,63 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 			Headers: soapHeaders,
 		}
 	}
-	buffer := new(bytes.Buffer)
-	var encoder SOAPEncoder
+	var reqBody []byte
+	var reqBoundary string
+	// buffer.WriteString("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"no\"?>")
 	if s.opts.mtom && s.opts.mma {
-		return fmt.Errorf("cannot use MTOM (XOP) and MMA (MIME Multipart Attachments) option at the same time")
+		return nil, fmt.Errorf("cannot use MTOM (XOP) and MMA (MIME Multipart Attachments) option at the same time")
 	} else if s.opts.mtom {
-		encoder = newMtomEncoder(buffer)
+		var buffer bytes.Buffer
+		encoder := newMtomEncoder(&buffer)
+		if err := encoder.Encode(envelope); err != nil {
+			return nil, err
+		}
+		if err := encoder.Flush(); err != nil {
+			return nil, err
+		}
+		reqBody = buffer.Bytes()
+		reqBoundary = encoder.Boundary()
+		log.Print("TRACE: 1")
 	} else if s.opts.mma {
-		encoder = newMmaEncoder(buffer, s.attachments)
+		var buffer bytes.Buffer
+		encoder := newMmaEncoder(&buffer, s.attachments)
+		if err := encoder.Encode(envelope); err != nil {
+			return nil, err
+		}
+		if err := encoder.Flush(); err != nil {
+			return nil, err
+		}
+		reqBody = buffer.Bytes()
+		reqBoundary = encoder.Boundary()
+		log.Print("TRACE: 2")
 	} else {
-		encoder = xml.NewEncoder(buffer)
+		/*
+			buf, err := xml.Marshal(envelope)
+			if nil != err {
+				return nil, err
+			}
+			dec := xml.NewDecoder(bytes.NewReader(buf))
+			reqBody, err = c14n.Canonicalize(dec)
+			if nil != err {
+				return nil, err
+			}
+		*/
+		reqBody, err = xml.Marshal(envelope)
+		if nil != err {
+			return nil, fmt.Errorf("marshal envelop failed: %w", err)
+		}
+		log.Printf("*** TRACE: 3: %s", string(reqBody))
 	}
 
-	if err := encoder.Encode(envelope); err != nil {
-		return err
+	invokeResult := CallResult{
+		RequestURL: s.url,
+		RequestContent: CallContent{
+			Body: string(reqBody),
+		},
 	}
-
-	if err := encoder.Flush(); err != nil {
-		return err
-	}
-
-	log.Printf("DEbuG: request-body: %s", buffer.String())
-	req, err := http.NewRequest("POST", s.url, buffer)
+	req, err := http.NewRequest("POST", s.url, bytes.NewReader(reqBody))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if s.opts.auth != nil {
 		req.SetBasicAuth(s.opts.auth.Login, s.opts.auth.Password)
@@ -581,14 +645,16 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 	req = req.WithContext(ctx)
 
 	if s.opts.mtom {
-		req.Header.Add("Content-Type", fmt.Sprintf(mtomContentType, encoder.(*mtomEncoder).Boundary()))
+		req.Header.Add("Content-Type", fmt.Sprintf(mtomContentType, reqBoundary))
 	} else if s.opts.mma {
-		req.Header.Add("Content-Type", fmt.Sprintf(mmaContentType, encoder.(*mmaEncoder).Boundary()))
+		req.Header.Add("Content-Type", fmt.Sprintf(mmaContentType, reqBoundary))
 	} else {
 		req.Header.Add("Content-Type", SOAPMIMEType)
 	}
-	req.Header.Add("SOAPAction", soapAction)
-	req.Header.Set("User-Agent", "gowsdl/0.1")
+	// req.Header.Add("SOAPAction", soapAction)
+	req.Header.Set("User-Agent", s.opts.userAgent)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Expect", "100-continue")
 	if s.opts.httpHeaders != nil {
 		for k, v := range s.opts.httpHeaders {
 			req.Header.Set(k, v)
@@ -605,24 +671,35 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 				d := net.Dialer{Timeout: s.opts.timeout}
 				return d.DialContext(ctx, network, addr)
 			},
-			TLSHandshakeTimeout: s.opts.tlshshaketimeout,
+			TLSHandshakeTimeout:   s.opts.tlshshaketimeout,
+			ExpectContinueTimeout: time.Second * 2,
 		}
 		client = &http.Client{Timeout: s.opts.contimeout, Transport: tr}
 	}
+	invokeResult.RequestContent.Header = req.Header.Clone()
 
+	invokeResult.InvokeAt = time.Now()
 	res, err := client.Do(req)
 	if err != nil {
-		return err
+		invokeResult.ReturnAt = time.Now()
+		return &invokeResult, err
 	}
 	defer res.Body.Close()
-
+	respBody, err := ioutil.ReadAll(res.Body)
+	invokeResult.ReturnAt = time.Now()
+	invokeResult.ResponseContent = CallContent{
+		Header: res.Header.Clone(),
+		Body:   string(respBody),
+	}
+	invokeResult.StatusCode = res.StatusCode
 	if res.StatusCode >= 400 {
-		body, _ := ioutil.ReadAll(res.Body)
-		log.Printf("ERROR: have status code >= 400: %v", s.url)
-		return &HTTPError{
+		return &invokeResult, &HTTPError{
 			StatusCode:   res.StatusCode,
-			ResponseBody: body,
+			ResponseBody: respBody,
 		}
+	}
+	if nil != err {
+		return &invokeResult, fmt.Errorf("cannot read all content from http body: %w", err)
 	}
 
 	// xml Decoder (used with and without MTOM) cannot handle namespace prefixes (yet),
@@ -637,39 +714,33 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 
 	mtomBoundary, err := getMtomHeader(res.Header.Get("Content-Type"))
 	if err != nil {
-		return err
+		return &invokeResult, err
 	}
 
 	var mmaBoundary string
 	if s.opts.mma {
 		mmaBoundary, err = getMmaHeader(res.Header.Get("Content-Type"))
 		if err != nil {
-			return err
+			return &invokeResult, err
 		}
-	}
-
-	dbgBuf, err := io.ReadAll(res.Body)
-	if nil != err {
-		log.Printf("ERROR: cannot read response body: %v", err)
-		return err
 	}
 
 	var dec SOAPDecoder
 	if mtomBoundary != "" {
-		dec = newMtomDecoder(res.Body, mtomBoundary)
+		dec = newMtomDecoder(bytes.NewReader(respBody), mtomBoundary)
 	} else if mmaBoundary != "" {
-		dec = newMmaDecoder(res.Body, mmaBoundary)
+		dec = newMmaDecoder(bytes.NewReader(respBody), mmaBoundary)
 	} else {
-		dec = xml.NewDecoder(bytes.NewReader(dbgBuf))
+		dec = xml.NewDecoder(bytes.NewReader(respBody))
 	}
 
 	if err := dec.Decode(respEnvelope); err != nil {
-		err = fmt.Errorf("cannot decode [%w]: %s", err, dbgBuf)
-		return err
+		return &invokeResult, fmt.Errorf("cannot decode: %w", err)
 	}
+	invokeResult.DecodedAt = time.Now()
 
 	if respEnvelope.Attachments != nil {
 		*retAttachments = respEnvelope.Attachments
 	}
-	return respEnvelope.Body.ErrorFromFault()
+	return &invokeResult, respEnvelope.Body.ErrorFromFault()
 }
