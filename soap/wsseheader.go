@@ -17,44 +17,45 @@ type binarySecurityToken struct {
 }
 
 type inclusiveNamespaces struct {
-	XMLName    xml.Name `xml:"http://www.w3.org/2001/10/xml-exc-c14n# InclusiveNamespaces"`
+	XMLName    xml.Name `xml:"ec:InclusiveNamespaces"`
+	XMLNS      string   `xml:"xmlns:ec,attr"`
 	PrefixList string   `xml:"PrefixList,attr"`
 }
 
 type canonicalizationMethod struct {
-	XMLName             xml.Name `xml:"CanonicalizationMethod"`
+	XMLName             xml.Name `xml:"ds:CanonicalizationMethod"`
 	Algorithm           string   `xml:"Algorithm,attr"`
 	InclusiveNamespaces inclusiveNamespaces
 }
 
 type signatureMethod struct {
-	XMLName   xml.Name `xml:"SignatureMethod"`
+	XMLName   xml.Name `xml:"ds:SignatureMethod"`
 	Algorithm string   `xml:"Algorithm,attr"`
 }
 
 type digestMethod struct {
-	XMLName   xml.Name `xml:"DigestMethod"`
+	XMLName   xml.Name `xml:"ds:DigestMethod"`
 	Algorithm string   `xml:"Algorithm,attr"`
 }
 
 type digestValue struct {
-	XMLName xml.Name `xml:"DigestValue"`
+	XMLName xml.Name `xml:"ds:DigestValue"`
 	Value   string   `xml:",chardata"`
 }
 
 type transform struct {
-	XMLName             xml.Name `xml:"Transform"`
-	Algorithm           string   `xml:"Algorithm,attr"`
-	InclusiveNamespaces inclusiveNamespaces
+	XMLName   xml.Name `xml:"ds:Transform"`
+	Algorithm string   `xml:"Algorithm,attr"`
+	// InclusiveNamespaces inclusiveNamespaces
 }
 
 type transforms struct {
-	XMLName   xml.Name `xml:"Transforms"`
+	XMLName   xml.Name `xml:"ds:Transforms"`
 	Transform transform
 }
 
 type signatureReference struct {
-	XMLName xml.Name `xml:"Reference"`
+	XMLName xml.Name `xml:"ds:Reference"`
 	URI     string   `xml:"URI,attr"`
 
 	Transforms transforms
@@ -64,8 +65,8 @@ type signatureReference struct {
 }
 
 type signedInfo struct {
-	XMLName xml.Name `xml:"SignedInfo"`
-	XMLNS   string   `xml:"xmlns,attr"`
+	XMLName xml.Name `xml:"ds:SignedInfo"`
+	XMLNS   string   `xml:"xmlns:ds,attr"`
 
 	CanonicalizationMethod canonicalizationMethod
 	SignatureMethod        signatureMethod
@@ -74,8 +75,8 @@ type signedInfo struct {
 
 type strReference struct {
 	XMLName   xml.Name `xml:"wsse:Reference"`
-	ValueType string   `xml:"ValueType,attr"`
 	URI       string   `xml:"URI,attr"`
+	ValueType string   `xml:"ValueType,attr"`
 }
 
 type securityTokenReference struct {
@@ -88,7 +89,7 @@ type securityTokenReference struct {
 }
 
 type keyInfo struct {
-	XMLName xml.Name `xml:"KeyInfo"`
+	XMLName xml.Name `xml:"ds:KeyInfo"`
 
 	KeyInfoID string `xml:"Id,attr"`
 
@@ -96,11 +97,11 @@ type keyInfo struct {
 }
 
 type signature struct {
-	XMLName xml.Name `xml:"Signature"`
-	XMLNS   string   `xml:"xmlns,attr"`
+	XMLName xml.Name `xml:"ds:Signature"`
+	XMLNS   string   `xml:"xmlns:ds,attr"`
 
 	SignedInfo     signedInfo
-	SignatureValue string `xml:"SignatureValue"`
+	SignatureValue string `xml:"ds:SignatureValue"`
 	KeyInfo        keyInfo
 }
 
