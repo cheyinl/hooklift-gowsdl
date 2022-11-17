@@ -3,13 +3,22 @@ package soap
 import (
 	"bytes"
 	"context"
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/ucarion/c14n"
 )
 
 type SOAPEncoder interface {
@@ -28,16 +37,20 @@ type SOAPEnvelopeResponse struct {
 	Attachments []MIMEMultipartAttachment `xml:"attachments,omitempty"`
 }
 
+// const SOAPMIMEType = "application/soap+xml; charset=utf-8"
+// const SOAPMIMEType = "text/xml; charset=utf-8"
+const SOAPMIMEType = "application/xml; charset=utf-8"
+
 type SOAPEnvelope struct {
-	XMLName xml.Name `xml:"soap:Envelope"`
-	XmlNS   string   `xml:"xmlns:soap,attr"`
+	XMLName xml.Name `xml:"SOAP-ENV:Envelope"`
+	XmlNS   string   `xml:"xmlns:SOAP-ENV,attr"`
 
 	Header *SOAPHeader
 	Body   SOAPBody
 }
 
 type SOAPHeader struct {
-	XMLName xml.Name `xml:"soap:Header"`
+	XMLName xml.Name `xml:"SOAP-ENV:Header"`
 
 	Headers []interface{}
 }
@@ -48,7 +61,12 @@ type SOAPHeaderResponse struct {
 }
 
 type SOAPBody struct {
-	XMLName xml.Name `xml:"soap:Body"`
+	XMLName xml.Name `xml:"SOAP-ENV:Body"`
+
+	// XMLNSWsu is the SOAP WS-Security utility namespace.
+	XMLNSWsu string `xml:"xmlns:wsu,attr,omitempty"`
+	// ID is a body ID used during WS-Security signing.
+	ID string `xml:"wsu:Id,attr,omitempty"`
 
 	Content interface{} `xml:",omitempty"`
 
@@ -187,11 +205,14 @@ func (e *HTTPError) Error() string {
 
 const (
 	// Predefined WSS namespaces to be used in
-	WssNsWSSE       string = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
-	WssNsWSU        string = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"
-	WssNsType       string = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText"
-	mtomContentType string = `multipart/related; start-info="application/soap+xml"; type="application/xop+xml"; boundary="%s"`
-	XmlNsSoapEnv    string = "http://schemas.xmlsoap.org/soap/envelope/"
+	WssNsWSSE           string = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd"
+	WssNsWSU            string = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"
+	WssNsType           string = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText"
+	mtomContentType     string = `multipart/related; start-info="application/soap+xml"; type="application/xop+xml"; boundary="%s"`
+	XmlNsSoapEnv        string = "http://schemas.xmlsoap.org/soap/envelope/"
+	WssEncodeTypeBase64        = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary"
+	WssValueTypeX509v3         = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-x509-token-profile-1.0#X509v3"
+	NsXMLDSig                  = "http://www.w3.org/2000/09/xmldsig#"
 )
 
 type WSSSecurityHeader struct {
@@ -340,6 +361,9 @@ type Client struct {
 	opts        *options
 	headers     []interface{}
 	attachments []MIMEMultipartAttachment
+
+	wssPrivateKey  *rsa.PrivateKey
+	wssCertBlobB64 string
 }
 
 // HTTPClient is a client which can make HTTP requests
@@ -358,6 +382,11 @@ func NewClient(url string, opt ...Option) *Client {
 		url:  url,
 		opts: &opts,
 	}
+}
+
+func (s *Client) SetWSSHeaderSigningKey(wssPrivateKey *rsa.PrivateKey, wssCertBlobBase64 string) {
+	s.wssPrivateKey = wssPrivateKey
+	s.wssCertBlobB64 = wssCertBlobBase64
 }
 
 // AddHeader adds envelope header
@@ -411,20 +440,115 @@ func (s *Client) CallWithFaultDetail(soapAction string, request, response interf
 	return s.call(context.Background(), soapAction, request, response, faultDetail, nil)
 }
 
+func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader *security, err error) {
+	bodyWssRefId := makeSecureId("B-")
+	envelope.Body.ID = bodyWssRefId
+	buf, err := xml.Marshal(&envelope.Body)
+	if nil != err {
+		return
+	}
+	dec := xml.NewDecoder(bytes.NewReader(buf))
+	cout, err := c14n.Canonicalize(dec)
+	if nil != err {
+		return
+	}
+	contentDigest := sha256.Sum256(cout)
+	encContentDigest := base64.StdEncoding.EncodeToString(contentDigest[:])
+	signedInfo := signedInfo{
+		XMLNS: NsXMLDSig,
+		CanonicalizationMethod: canonicalizationMethod{
+			Algorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
+			InclusiveNamespaces: inclusiveNamespaces{
+				PrefixList: "SOAP-ENV",
+			},
+		},
+		SignatureMethod: signatureMethod{
+			Algorithm: "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256",
+		},
+		Reference: signatureReference{
+			URI: "#" + bodyWssRefId,
+			Transforms: transforms{
+				Transform: transform{
+					Algorithm:           "http://www.w3.org/2001/10/xml-exc-c14n#",
+					InclusiveNamespaces: inclusiveNamespaces{},
+				},
+			},
+			DigestMethod: digestMethod{
+				Algorithm: "http://www.w3.org/2001/04/xmlenc#sha256",
+			},
+			DigestValue: digestValue{
+				Value: encContentDigest,
+			},
+		},
+	}
+	if buf, err = xml.Marshal(signedInfo); nil != err {
+		return
+	}
+	dec = xml.NewDecoder(bytes.NewReader(buf))
+	if cout, err = c14n.Canonicalize(dec); nil != err {
+		return
+	}
+	signedInfoDigest := sha256.Sum256(cout)
+	sigValue, err := rsa.SignPKCS1v15(rand.Reader, s.wssPrivateKey, crypto.SHA256, signedInfoDigest[:])
+	if nil != err {
+		return
+	}
+	encSigValue := base64.StdEncoding.EncodeToString(sigValue)
+	secTokenWsuRefId := makeSecureId("X509CERT-")
+	secTokenRefId := makeSecureId("SECTOK-")
+	keyInfoRefId := makeSecureId("KINF-")
+	securityHeader = &security{
+		XMLNS:              WssNsWSSE,
+		SOAPMustUnderstand: 1,
+		BinarySecurityToken: binarySecurityToken{
+			XMLNS:        WssNsWSU,
+			WsuID:        secTokenWsuRefId,
+			EncodingType: WssEncodeTypeBase64,
+			ValueType:    WssValueTypeX509v3,
+			Value:        s.wssCertBlobB64,
+		},
+		Signature: signature{
+			XMLNS:          NsXMLDSig,
+			SignedInfo:     signedInfo,
+			SignatureValue: encSigValue,
+			KeyInfo: keyInfo{
+				KeyInfoID: keyInfoRefId,
+				SecurityTokenReference: securityTokenReference{
+					XMLNS: WssNsWSU,
+					StrID: secTokenRefId,
+					Reference: strReference{
+						ValueType: WssValueTypeX509v3,
+						URI:       "#" + secTokenWsuRefId,
+					},
+				},
+			},
+		},
+	}
+	return
+}
+
 func (s *Client) call(ctx context.Context, soapAction string, request, response interface{}, faultDetail FaultError,
 	retAttachments *[]MIMEMultipartAttachment) error {
 	// SOAP envelope capable of namespace prefixes
 	envelope := SOAPEnvelope{
 		XmlNS: XmlNsSoapEnv,
 	}
-
+	envelope.Body.XMLNSWsu = WssNsWSU
+	envelope.Body.Content = request
+	soapHeaders := make([]interface{}, 1, 1+len(s.headers))
+	secHeader, err := s.makeWSSESecurityHeader(&envelope)
+	if nil != err {
+		return err
+	}
+	soapHeaders[0] = secHeader
+	if len(s.headers) > 0 {
+		soapHeaders = append(soapHeaders, s.headers...)
+	}
 	if s.headers != nil && len(s.headers) > 0 {
 		envelope.Header = &SOAPHeader{
-			Headers: s.headers,
+			Headers: soapHeaders,
 		}
 	}
-
-	envelope.Body.Content = request
 	buffer := new(bytes.Buffer)
 	var encoder SOAPEncoder
 	if s.opts.mtom && s.opts.mma {
@@ -445,6 +569,7 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 		return err
 	}
 
+	log.Printf("DEbuG: request-body: %s", buffer.String())
 	req, err := http.NewRequest("POST", s.url, buffer)
 	if err != nil {
 		return err
@@ -460,7 +585,7 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 	} else if s.opts.mma {
 		req.Header.Add("Content-Type", fmt.Sprintf(mmaContentType, encoder.(*mmaEncoder).Boundary()))
 	} else {
-		req.Header.Add("Content-Type", "text/xml; charset=\"utf-8\"")
+		req.Header.Add("Content-Type", SOAPMIMEType)
 	}
 	req.Header.Add("SOAPAction", soapAction)
 	req.Header.Set("User-Agent", "gowsdl/0.1")
@@ -474,6 +599,7 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 	client := s.opts.client
 	if client == nil {
 		tr := &http.Transport{
+			Proxy:           http.ProxyFromEnvironment,
 			TLSClientConfig: s.opts.tlsCfg,
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				d := net.Dialer{Timeout: s.opts.timeout}
@@ -492,6 +618,7 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 
 	if res.StatusCode >= 400 {
 		body, _ := ioutil.ReadAll(res.Body)
+		log.Printf("ERROR: have status code >= 400: %v", s.url)
 		return &HTTPError{
 			StatusCode:   res.StatusCode,
 			ResponseBody: body,
@@ -514,11 +641,17 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 	}
 
 	var mmaBoundary string
-	if s.opts.mma{
+	if s.opts.mma {
 		mmaBoundary, err = getMmaHeader(res.Header.Get("Content-Type"))
 		if err != nil {
 			return err
 		}
+	}
+
+	dbgBuf, err := io.ReadAll(res.Body)
+	if nil != err {
+		log.Printf("ERROR: cannot read response body: %v", err)
+		return err
 	}
 
 	var dec SOAPDecoder
@@ -527,10 +660,11 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 	} else if mmaBoundary != "" {
 		dec = newMmaDecoder(res.Body, mmaBoundary)
 	} else {
-		dec = xml.NewDecoder(res.Body)
+		dec = xml.NewDecoder(bytes.NewReader(dbgBuf))
 	}
 
 	if err := dec.Decode(respEnvelope); err != nil {
+		err = fmt.Errorf("cannot decode [%w]: %s", err, dbgBuf)
 		return err
 	}
 
