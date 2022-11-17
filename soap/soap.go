@@ -12,7 +12,6 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/http"
 	"time"
@@ -596,7 +595,6 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 		}
 		reqBody = buffer.Bytes()
 		reqBoundary = encoder.Boundary()
-		log.Print("TRACE: 1")
 	} else if s.opts.mma {
 		var buffer bytes.Buffer
 		encoder := newMmaEncoder(&buffer, s.attachments)
@@ -608,7 +606,6 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 		}
 		reqBody = buffer.Bytes()
 		reqBoundary = encoder.Boundary()
-		log.Print("TRACE: 2")
 	} else {
 		/*
 			buf, err := xml.Marshal(envelope)
@@ -625,7 +622,6 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 		if nil != err {
 			return nil, fmt.Errorf("marshal envelop failed: %w", err)
 		}
-		log.Printf("*** TRACE: 3: %s", string(reqBody))
 	}
 
 	invokeResult := CallResult{
