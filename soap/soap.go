@@ -438,36 +438,36 @@ func (s *Client) SetHeaders(headers ...interface{}) {
 }
 
 // CallContext performs HTTP POST request with a context
-func (s *Client) CallContext(ctx context.Context, soapAction string, request, response interface{}) (*CallResult, error) {
-	return s.call(ctx, soapAction, request, response, nil, nil)
+func (s *Client) CallContext(ctx context.Context, soapAction string, dmOpenAccount *DMOpenAccountRef, request, response interface{}) (*CallResult, error) {
+	return s.call(ctx, soapAction, dmOpenAccount, request, response, nil, nil)
 }
 
 // Call performs HTTP POST request.
 // Note that if the server returns a status code >= 400, a HTTPError will be returned
-func (s *Client) Call(soapAction string, request, response interface{}) (*CallResult, error) {
-	return s.call(context.Background(), soapAction, request, response, nil, nil)
+func (s *Client) Call(soapAction string, dmOpenAccount *DMOpenAccountRef, request, response interface{}) (*CallResult, error) {
+	return s.call(context.Background(), soapAction, dmOpenAccount, request, response, nil, nil)
 }
 
 // CallContextWithAttachmentsAndFaultDetail performs HTTP POST request.
 // Note that if SOAP fault is returned, it will be stored in the error.
 // On top the attachments array will be filled with attachments returned from the SOAP request.
-func (s *Client) CallContextWithAttachmentsAndFaultDetail(ctx context.Context, soapAction string, request,
+func (s *Client) CallContextWithAttachmentsAndFaultDetail(ctx context.Context, soapAction string, dmOpenAccount *DMOpenAccountRef, request,
 	response interface{}, faultDetail FaultError, attachments *[]MIMEMultipartAttachment) (*CallResult, error) {
-	return s.call(ctx, soapAction, request, response, faultDetail, attachments)
+	return s.call(ctx, soapAction, dmOpenAccount, request, response, faultDetail, attachments)
 }
 
 // CallContextWithFault performs HTTP POST request.
 // Note that if SOAP fault is returned, it will be stored in the error.
-func (s *Client) CallContextWithFaultDetail(ctx context.Context, soapAction string, request, response interface{}, faultDetail FaultError) (*CallResult, error) {
-	return s.call(ctx, soapAction, request, response, faultDetail, nil)
+func (s *Client) CallContextWithFaultDetail(ctx context.Context, soapAction string, dmOpenAccount *DMOpenAccountRef, request, response interface{}, faultDetail FaultError) (*CallResult, error) {
+	return s.call(ctx, soapAction, dmOpenAccount, request, response, faultDetail, nil)
 }
 
 // CallWithFaultDetail performs HTTP POST request.
 // Note that if SOAP fault is returned, it will be stored in the error.
 // the passed in fault detail is expected to implement FaultError interface,
 // which allows to condense the detail into a short error message.
-func (s *Client) CallWithFaultDetail(soapAction string, request, response interface{}, faultDetail FaultError) (*CallResult, error) {
-	return s.call(context.Background(), soapAction, request, response, faultDetail, nil)
+func (s *Client) CallWithFaultDetail(soapAction string, dmOpenAccount *DMOpenAccountRef, request, response interface{}, faultDetail FaultError) (*CallResult, error) {
+	return s.call(context.Background(), soapAction, dmOpenAccount, request, response, faultDetail, nil)
 }
 
 func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader *security, err error) {
@@ -568,7 +568,7 @@ func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader 
 	return
 }
 
-func (s *Client) call(ctx context.Context, soapAction string, request, response interface{}, faultDetail FaultError,
+func (s *Client) call(ctx context.Context, soapAction string, dmOpenAccount *DMOpenAccountRef, request, response interface{}, faultDetail FaultError,
 	retAttachments *[]MIMEMultipartAttachment) (*CallResult, error) {
 	// SOAP envelope capable of namespace prefixes
 	envelope := SOAPEnvelope{
@@ -576,12 +576,15 @@ func (s *Client) call(ctx context.Context, soapAction string, request, response 
 	}
 	envelope.Body.XMLNSWsu = WssNsWSU
 	envelope.Body.Content = request
-	soapHeaders := make([]interface{}, 1, 1+len(s.headers))
+	soapHeaders := make([]interface{}, 1, 2+len(s.headers))
 	secHeader, err := s.makeWSSESecurityHeader(&envelope)
 	if nil != err {
 		return nil, err
 	}
 	soapHeaders[0] = secHeader
+	if dmOpenAccount != nil {
+		soapHeaders = append(soapHeaders, dmOpenAccount)
+	}
 	if len(s.headers) > 0 {
 		soapHeaders = append(soapHeaders, s.headers...)
 	}
