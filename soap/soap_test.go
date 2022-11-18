@@ -69,7 +69,7 @@ func TestClient_Call(t *testing.T) {
 	client := NewClient(ts.URL)
 	req := &Ping{Request: &PingRequest{Message: "Hi"}}
 	reply := &PingResponse{}
-	if _, err := client.Call("GetData", nil, req, reply); err != nil {
+	if _, err := client.Call("GetData", req, reply); err != nil {
 		t.Fatalf("couln't call service: %v", err)
 	}
 
@@ -122,7 +122,7 @@ func TestClient_Send_Correct_Headers(t *testing.T) {
 		client := NewClient(ts.URL, WithHTTPHeaders(test.reqHeaders))
 		req := struct{}{}
 		reply := struct{}{}
-		client.Call(test.action, nil, req, reply)
+		client.Call(test.action, req, reply)
 
 		for k, v := range test.expectedHeaders {
 			h := gotHeaders.Get(k)
@@ -166,7 +166,7 @@ func TestClient_Attachments_WithAttachmentResponse(t *testing.T) {
 	retAttachments := make([]MIMEMultipartAttachment, 0)
 
 	// WHEN
-	if _, err := client.CallContextWithAttachmentsAndFaultDetail(context.TODO(), "''", nil, req,
+	if _, err := client.CallContextWithAttachmentsAndFaultDetail(context.TODO(), "''", req,
 		reply, nil, &retAttachments); err != nil {
 		t.Fatalf("couln't call service: %v", err)
 	}
@@ -191,7 +191,7 @@ func TestClient_MTOM(t *testing.T) {
 	client := NewClient(ts.URL, WithMTOM())
 	req := &PingRequest{Attachment: NewBinary([]byte("Attached data")).SetContentType("text/plain")}
 	reply := &PingRequest{}
-	if _, err := client.Call("GetData", nil, req, reply); err != nil {
+	if _, err := client.Call("GetData", req, reply); err != nil {
 		t.Fatalf("couln't call service: %v", err)
 	}
 
@@ -353,7 +353,7 @@ func Test_Client_FaultDefault(t *testing.T) {
 				Item:    tt.emptyFault,
 				hasData: tt.hasData,
 			}
-			if _, err := client.CallWithFaultDetail("GetData", nil, req, &reply, &fault); err != nil {
+			if _, err := client.CallWithFaultDetail("GetData", req, &reply, &fault); err != nil {
 				assert.EqualError(t, err, faultErrString)
 				assert.EqualValues(t, tt.fault, fault.Item)
 			} else {
@@ -824,7 +824,7 @@ func TestHTTPError(t *testing.T) {
 			}))
 			defer ts.Close()
 			client := NewClient(ts.URL)
-			_, gotErr := client.Call("GetData", nil, &Ping{}, &PingResponse{})
+			_, gotErr := client.Call("GetData", &Ping{}, &PingResponse{})
 			if test.wantErr {
 				if gotErr == nil {
 					t.Fatalf("Expected an error from call.  Received none")
