@@ -505,7 +505,11 @@ func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader 
 			Transforms: transforms{
 				Transform: transform{
 					Algorithm: "http://www.w3.org/2001/10/xml-exc-c14n#",
-					// InclusiveNamespaces: inclusiveNamespaces{},
+					/*
+						InclusiveNamespaces: inclusiveNamespaces{
+							XMLNS: NsXMLExcC14N,
+						},
+					*/
 				},
 			},
 			DigestMethod: digestMethod{
@@ -536,6 +540,7 @@ func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader 
 	}
 	encSigValue := base64.StdEncoding.EncodeToString(sigValue)
 	secTokenWsuRefId := makeSecureId("X509CERT-")
+	signatureId := makeSecureId("SIGX-")
 	secTokenRefId := makeSecureId("SECTOK-")
 	keyInfoRefId := makeSecureId("KINF-")
 	securityHeader = &security{
@@ -550,6 +555,7 @@ func (s *Client) makeWSSESecurityHeader(envelope *SOAPEnvelope) (securityHeader 
 		},
 		Signature: signature{
 			XMLNS:          NsXMLDSig,
+			SigID:          signatureId,
 			SignedInfo:     signedInfo,
 			SignatureValue: encSigValue,
 			KeyInfo: keyInfo{

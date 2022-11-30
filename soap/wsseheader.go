@@ -101,6 +101,8 @@ type signature struct {
 	XMLName xml.Name `xml:"ds:Signature"`
 	XMLNS   string   `xml:"xmlns:ds,attr"`
 
+	SigID string `xml:"Id,attr"`
+
 	SignedInfo     signedInfo
 	SignatureValue string `xml:"ds:SignatureValue"`
 	KeyInfo        keyInfo
