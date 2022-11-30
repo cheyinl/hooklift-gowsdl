@@ -15,6 +15,8 @@ const (
 	timeLayout = "15:04:05.999999999Z07:00"
 )
 
+const CAPTimeFormat = "2006-01-02T15:04:05-07:00"
+
 //
 // DateTime struct
 //
@@ -64,10 +66,13 @@ func (xdt XSDDateTime) MarshalXMLAttr(name xml.Name) (xml.Attr, error) {
 // returns string representation and skips "zero" time values. It also checks if nanoseconds and TZ exist.
 func (xdt XSDDateTime) string() string {
 	if !xdt.innerTime.IsZero() {
-		dateTimeLayout := time.RFC3339Nano
-		if xdt.innerTime.Nanosecond() == 0 {
-			dateTimeLayout = time.RFC3339
-		}
+		/*
+			dateTimeLayout := time.RFC3339Nano
+			if xdt.innerTime.Nanosecond() == 0 {
+				dateTimeLayout = time.RFC3339
+			}
+		*/
+		dateTimeLayout := CAPTimeFormat
 		dtString := xdt.innerTime.Format(dateTimeLayout)
 		if !xdt.hasTz {
 			// split off time portion
@@ -89,7 +94,12 @@ func (xdt *XSDDateTime) UnmarshalXML(d *xml.Decoder, start xml.StartElement) err
 	if err != nil {
 		return err
 	}
-	xdt.innerTime, xdt.hasTz, err = fromString(content, time.RFC3339Nano)
+	xdt.innerTime, err = time.Parse(CAPTimeFormat, content)
+	if nil != err {
+		xdt.innerTime, xdt.hasTz, err = fromString(content, time.RFC3339Nano)
+	} else {
+		xdt.hasTz = true
+	}
 	return err
 }
 
