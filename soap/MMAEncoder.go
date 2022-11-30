@@ -128,7 +128,7 @@ func (d *mmaDecoder) Decode(v interface{}) error {
 			// decode attachment parts
 			contentID := p.Header.Get("Content-Id")
 			if contentID == "" {
-				return errors.New("Invalid multipart content ID")
+				return errors.New("invalid multipart content ID for MMA")
 			}
 			content, err := ioutil.ReadAll(p)
 			if err != nil {
