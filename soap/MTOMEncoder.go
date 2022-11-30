@@ -231,7 +231,11 @@ func (d *mtomDecoder) Decode(v interface{}) error {
 			return err
 		}
 		contentType := p.Header.Get("Content-Type")
-		if contentType == "application/xop+xml" {
+		mediaType, _, err := mime.ParseMediaType(contentType)
+		if nil != err {
+			mediaType = contentType
+		}
+		if mediaType == "application/xop+xml" {
 			err := xml.NewDecoder(p).Decode(v)
 			if err != nil {
 				return err
