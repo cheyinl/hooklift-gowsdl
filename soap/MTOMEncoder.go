@@ -192,7 +192,7 @@ func getMtomHeader(contentType string) (string, error) {
 	if strings.HasPrefix(mediaType, "multipart/") {
 		boundary, ok := params["boundary"]
 		if !ok || boundary == "" {
-			return "", fmt.Errorf("Invalid multipart boundary: %s", boundary)
+			return "", fmt.Errorf("invalid multipart boundary: %s", boundary)
 		}
 
 		cType, ok := params["type"]
@@ -202,8 +202,8 @@ func getMtomHeader(contentType string) (string, error) {
 		}
 
 		startInfo, ok := params["start-info"]
-		if !ok || startInfo != "application/soap+xml" {
-			return "", fmt.Errorf(`Expected param start-info="application/soap+xml", got %s`, startInfo)
+		if !ok || ((startInfo != "application/soap+xml") && (startInfo != "text/xml")) {
+			return "", fmt.Errorf(`expected param start-info="application/soap+xml", got %s`, startInfo)
 		}
 		return boundary, nil
 	}
@@ -239,7 +239,7 @@ func (d *mtomDecoder) Decode(v interface{}) error {
 		} else {
 			contentID := p.Header.Get("Content-Id")
 			if contentID == "" {
-				return errors.New("Invalid multipart content ID")
+				return errors.New("invalid multipart content ID")
 			}
 			content, err := ioutil.ReadAll(p)
 			if err != nil {
