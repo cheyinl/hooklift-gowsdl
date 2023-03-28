@@ -271,6 +271,7 @@ type options struct {
 	timeout          time.Duration
 	contimeout       time.Duration
 	tlshshaketimeout time.Duration
+	keepalive        time.Duration
 	client           HTTPClient
 	userAgent        string
 	httpHeaders      map[string]string
@@ -282,6 +283,7 @@ var defaultOptions = options{
 	timeout:          time.Duration(30 * time.Second),
 	contimeout:       time.Duration(90 * time.Second),
 	tlshshaketimeout: time.Duration(15 * time.Second),
+	keepalive:        time.Duration(30 * time.Second),
 	userAgent:        "gowsdl/0.1",
 }
 
@@ -310,6 +312,14 @@ func WithTLSHandshakeTimeout(t time.Duration) Option {
 func WithRequestTimeout(t time.Duration) Option {
 	return func(o *options) {
 		o.contimeout = t
+	}
+}
+
+// WithKeepAlive is an Option to set interval between keep-alive probes
+// This option cannot be used with WithHTTPClient
+func WithKeepAlive(t time.Duration) Option {
+	return func(o *options) {
+		o.keepalive = t
 	}
 }
 
@@ -370,7 +380,10 @@ func makeDefaultClient(opts *options) HTTPClient {
 		Proxy:           http.ProxyFromEnvironment,
 		TLSClientConfig: opts.tlsCfg,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			d := net.Dialer{Timeout: opts.timeout}
+			d := net.Dialer{
+				Timeout:   opts.timeout,
+				KeepAlive: opts.keepalive,
+			}
 			return d.DialContext(ctx, network, addr)
 		},
 		TLSHandshakeTimeout:   opts.tlshshaketimeout,
